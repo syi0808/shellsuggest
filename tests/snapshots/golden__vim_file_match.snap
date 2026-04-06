@@ -1,0 +1,8 @@
+---
+source: tests/golden.rs
+expression: "serde_json::json!({\n    \"suggestion\": result.as_ref().map(|c| &c.text), \"source\":\n    result.as_ref().map(|c| &c.source),\n})"
+---
+{
+  "source": "path",
+  "suggestion": "vim readme.md"
+}

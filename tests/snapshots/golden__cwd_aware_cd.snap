@@ -1,0 +1,9 @@
+---
+source: tests/golden.rs
+expression: "serde_json::json!({\n    \"suggestion\": result.as_ref().map(|c| &c.text), \"source\":\n    result.as_ref().map(|c| &c.source), \"score\":\n    result.as_ref().map(|c| (c.score * 1000.0).round() / 1000.0),\n})"
+---
+{
+  "score": 0.800000011920929,
+  "source": "cwd_history",
+  "suggestion": "cd src"
+}
