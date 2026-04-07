@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-latest
+            asset: shellsuggest-darwin-arm64.tar.gz
+            cross: false
+          - target: x86_64-apple-darwin
+            runner: macos-latest
+            asset: shellsuggest-darwin-x64.tar.gz
+            cross: false
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            asset: shellsuggest-linux-arm64.tar.gz
+            cross: true
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            asset: shellsuggest-linux-x64.tar.gz
+            cross: false
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            asset: shellsuggest-windows-x64.zip
+            cross: false
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross
+        if: matrix.cross
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      - name: Build
+        run: ${{ matrix.cross && 'cross' || 'cargo' }} build --release --target ${{ matrix.target }}
+
+      - name: Package (Unix)
+        if: runner.os != 'Windows'
+        run: tar czf ${{ matrix.asset }} -C target/${{ matrix.target }}/release shellsuggest
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path target/${{ matrix.target }}/release/shellsuggest.exe -DestinationPath ${{ matrix.asset }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: ${{ matrix.asset }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create ${{ github.ref_name }} *.tar.gz *.zip --generate-notes
+
+  homebrew:
+    needs: release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+
+      - name: Compute SHA256
+        id: sha
+        run: |
+          echo "darwin_arm64=$(sha256sum shellsuggest-darwin-arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "darwin_x64=$(sha256sum shellsuggest-darwin-x64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "linux_arm64=$(sha256sum shellsuggest-linux-arm64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "linux_x64=$(sha256sum shellsuggest-linux-x64.tar.gz | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Generate formula
+        run: |
+          TAG="${{ github.ref_name }}"
+          VERSION="${TAG#v}"
+          cat > shellsuggest.rb <<EOF
+          class Shellsuggest < Formula
+            desc "Smarter zsh autosuggestions — ranked by your current directory"
+            homepage "https://github.com/syi0808/shellsuggest"
+            version "${VERSION}"
+            license "Apache-2.0"
+
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/syi0808/shellsuggest/releases/download/${TAG}/shellsuggest-darwin-arm64.tar.gz"
+                sha256 "${{ steps.sha.outputs.darwin_arm64 }}"
+              elsif Hardware::CPU.intel?
+                url "https://github.com/syi0808/shellsuggest/releases/download/${TAG}/shellsuggest-darwin-x64.tar.gz"
+                sha256 "${{ steps.sha.outputs.darwin_x64 }}"
+              end
+            end
+
+            on_linux do
+              if Hardware::CPU.arm?
+                url "https://github.com/syi0808/shellsuggest/releases/download/${TAG}/shellsuggest-linux-arm64.tar.gz"
+                sha256 "${{ steps.sha.outputs.linux_arm64 }}"
+              elsif Hardware::CPU.intel?
+                url "https://github.com/syi0808/shellsuggest/releases/download/${TAG}/shellsuggest-linux-x64.tar.gz"
+                sha256 "${{ steps.sha.outputs.linux_x64 }}"
+              end
+            end
+
+            def install
+              bin.install "shellsuggest"
+            end
+
+            test do
+              system "#{bin}/shellsuggest", "--version"
+            end
+          end
+          EOF
+          sed -i 's/^          //' shellsuggest.rb
+
+      - name: Update homebrew tap
+        env:
+          BREW_GITHUB_TOKEN: ${{ secrets.BREW_GITHUB_TOKEN }}
+        run: |
+          git clone https://x-access-token:${BREW_GITHUB_TOKEN}@github.com/syi0808/homebrew-shellsuggest.git tap
+          cp shellsuggest.rb tap/Formula/shellsuggest.rb
+          cd tap
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/shellsuggest.rb
+          git commit -m "Update shellsuggest to ${{ github.ref_name }}"
+          git push
