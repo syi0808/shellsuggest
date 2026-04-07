@@ -39,6 +39,20 @@ shellsuggest provides smarter zsh autosuggestions, ranked by your current direct
 
 ### Install
 
+**Homebrew** (macOS / Linux):
+
+```bash
+brew install syi0808/shellsuggest/shellsuggest
+```
+
+**Cargo** (requires Rust toolchain):
+
+```bash
+cargo install shellsuggest
+```
+
+**From source**:
+
 ```bash
 git clone https://github.com/syi0808/shellsuggest.git
 cd shellsuggest
