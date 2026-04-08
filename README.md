@@ -4,6 +4,12 @@ cwd-aware inline suggestion engine for zsh.
 
 Unlike [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) which suggests based on history prefix match alone, shellsuggest knows **where you are**. It ranks suggestions by your current directory, validates that suggested paths actually exist, and keeps a long-lived Rust query coprocess hot so the interactive path stays in the microsecond range on local benchmarks.
 
+## Reality Check
+
+- This is a vibe-coded tool.
+- The MVP spent roughly 2 hours on design and 5+ hours on QA.
+- The author runs it daily on two Macs.
+
 ## Why
 
 ```
@@ -22,6 +28,7 @@ Unlike [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) w
 - **Transition-aware ranking** - the last successful command biases the next suggestion, so `vim main.rs` can push `make test` above other `make` commands
 - **`cd` cold-start assist** - when local `cd` history is empty, suggest direct child directories from the current workspace
 - **`HISTFILE` prewarm** - on query process start, import recent zsh history as a global fallback for prefixes that have no live journal match yet
+- **Async coprocess runtime** - suggestion work stays in a hot Rust query process instead of paying per-keystroke process spawn overhead in zsh
 - **Path validation** - file/path commands like `vim` only suggest entries that actually exist
 - **Multiple candidates** - keep the best few suggestions in memory and cycle them inline with `Alt+n` / `Alt+p`
 - **Fast** - Rust query engine with pre-aggregated SQLite summaries, ~4.7us broker lookups and ~5.9us query protocol roundtrips at 100k rows on current local benchmarks
@@ -222,6 +229,15 @@ Notes:
 - `Query protocol roundtrip` measures compact line encode/parse plus runtime handling on a reused query runtime.
 - `Path plugin` measures a real `pushd` directory suggestion over a 256-entry directory.
 - These numbers are core-engine benchmarks. Real interactive latency also includes zsh widget/rendering overhead.
+- All benchmark numbers in the table come from `cargo bench --bench suggest` on the machine listed below.
+
+Local process measurements on the author's machine, taken against `target/release/shellsuggest query` over a 10,000-request run:
+
+- ~0.90us CPU time per query (median)
+- ~4.5-4.8 MB RSS for the long-lived query process
+- CPU time was measured from the query process's own cumulative user+system CPU counters before and after the run.
+- RSS was read from the same process during the run; these numbers describe the long-lived query process itself, not the surrounding shell, terminal, or tmux session.
+- The run used a temporary isolated `XDG_DATA_HOME`/`XDG_CONFIG_HOME`, preloaded a small warmup history set, then sent 10,000 real line-protocol requests over stdio.
 
 Benchmark environment:
 
@@ -230,6 +246,15 @@ Benchmark environment:
 - 18 GB memory
 - macOS 26.2 (`25C56`), `arm64`
 - `rustc 1.93.1 (01f6ddf75 2026-02-11)`
+
+## Testing
+
+shellsuggest leans hard on automated coverage for a shell plugin:
+
+- 47 tmux/RSpec end-to-end examples drive a real `zsh -f` session
+- 6 of those E2E scenarios are ported or adapted from `zsh-autosuggestions`
+- 41 additional E2E examples cover shellsuggest-specific behavior
+- Another 104 Rust tests cover ranking, protocol, snapshots, DB behavior, and child-process integration
 
 ## Development
 
