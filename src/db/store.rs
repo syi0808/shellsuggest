@@ -1,6 +1,7 @@
 use anyhow::Result;
 use rusqlite::{params, params_from_iter, Connection};
 use std::collections::HashMap;
+use std::time::Duration;
 
 use super::models::{
     FeedbackEntry, JournalEntry, PathCacheEntry, RankedCommand, SeededCommandStat,
@@ -13,6 +14,7 @@ pub struct Store {
 impl Store {
     pub fn open(path: &str) -> Result<Self> {
         let conn = Connection::open(path)?;
+        configure_disk_connection(&conn)?;
         let mut store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -20,6 +22,7 @@ impl Store {
 
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
+        conn.busy_timeout(Duration::from_millis(1_000))?;
         let mut store = Self { conn };
         store.migrate()?;
         Ok(store)
@@ -603,6 +606,17 @@ impl Store {
         }
         Ok(())
     }
+}
+
+fn configure_disk_connection(conn: &Connection) -> Result<()> {
+    conn.busy_timeout(Duration::from_millis(1_000))?;
+    conn.execute_batch(
+        "
+        PRAGMA journal_mode = WAL;
+        PRAGMA synchronous = NORMAL;
+        ",
+    )?;
+    Ok(())
 }
 
 fn prefix_upper_bound(prefix: &str) -> String {

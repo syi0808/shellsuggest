@@ -1,9 +1,7 @@
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 
 use clap::{Parser, Subcommand};
 use shellsuggest::config::Config;
-use shellsuggest::daemon::broker::BrokerOptions;
 
 #[derive(Parser)]
 #[command(
@@ -18,11 +16,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Start the suggestion daemon
-    Serve,
-    /// Client mode (zsh coproc relay)
+    /// Query mode (zsh coproc engine)
     Query,
-    /// Show daemon status and perf counters
+    /// Show runtime status and perf counters
     Status,
     /// Inspect the command journal
     Journal,
@@ -60,68 +56,16 @@ fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     match cli.command {
-        Commands::Serve => {
-            let config = Config::load()?;
-            let db_path = shellsuggest::daemon::server::default_db_path();
-            if let Some(parent) = db_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let store = Arc::new(Mutex::new(shellsuggest::db::store::Store::open(
-                db_path.to_str().unwrap(),
-            )?));
-            {
-                let store_guard = store.lock().unwrap();
-                match shellsuggest::history_seed::prime_store_from_histfile(&store_guard, &config) {
-                    Ok(summary) => {
-                        if let Some(path) = summary.source_path {
-                            tracing::info!(
-                                path = %path.display(),
-                                parsed_entries = summary.parsed_entries,
-                                imported_commands = summary.imported_commands,
-                                "seeded history fallback from HISTFILE"
-                            );
-                        }
-                    }
-                    Err(err) => {
-                        tracing::warn!(error = %err, "failed to seed history fallback from HISTFILE");
-                    }
-                }
-            }
-            let socket_path = config.socket_path();
-
-            let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(shellsuggest::daemon::server::run(
-                &socket_path,
-                store,
-                BrokerOptions {
-                    path_show_hidden: config.path.show_hidden,
-                    path_max_entries: config.path.max_entries,
-                    max_candidates: config.ui.max_candidates,
-                    cd_fallback_mode: config.cd_fallback_mode(),
-                },
-            ))?;
-        }
         Commands::Query => {
             let config = Config::load()?;
-            let socket_path = config.socket_path();
             let rt = tokio::runtime::Runtime::new()?;
-            rt.block_on(shellsuggest::client::run(&socket_path))?;
+            rt.block_on(shellsuggest::client::run(&config))?;
         }
         Commands::Status => {
             let config = Config::load()?;
-            let socket_path = config.socket_path();
-            let pid_path = socket_path.with_extension("pid");
+            println!("runtime: per-shell query process (no shared daemon)");
 
-            if !socket_path.exists() {
-                println!("daemon: not running (no socket)");
-            } else {
-                let pid = std::fs::read_to_string(&pid_path).unwrap_or_else(|_| "unknown".into());
-
-                println!("daemon: running (pid {})", pid.trim());
-                println!("socket: {}", socket_path.display());
-            }
-
-            let db_path = shellsuggest::daemon::server::default_db_path();
+            let db_path = shellsuggest::runtime::default_db_path();
             if db_path.exists() {
                 println!("db: {}", db_path.display());
                 let store = shellsuggest::db::store::Store::open(db_path.to_str().unwrap())?;
@@ -166,7 +110,7 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Journal => {
             let _config = Config::load()?;
-            let db_path = shellsuggest::daemon::server::default_db_path();
+            let db_path = shellsuggest::runtime::default_db_path();
             if !db_path.exists() {
                 println!("no journal found at {}", db_path.display());
                 return Ok(());

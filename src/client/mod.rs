@@ -1,64 +1,30 @@
-use std::path::Path;
-use std::process::Command;
-
 use anyhow::Result;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::net::UnixStream;
 
-pub async fn run(socket_path: &Path) -> Result<()> {
-    let stream = match UnixStream::connect(socket_path).await {
-        Ok(s) => s,
-        Err(_) => {
-            start_daemon()?;
-            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
-            UnixStream::connect(socket_path).await?
-        }
-    };
+use crate::config::Config;
+use crate::protocol::{self, DaemonMessage};
+use crate::runtime::QueryRuntime;
 
-    let (reader, mut writer) = stream.into_split();
-    let mut socket_lines = BufReader::new(reader).lines();
+pub async fn run(config: &Config) -> Result<()> {
+    let mut runtime = QueryRuntime::from_config(config)?;
     let stdin = tokio::io::stdin();
     let mut stdin_lines = BufReader::new(stdin).lines();
     let mut stdout = tokio::io::stdout();
 
-    loop {
-        tokio::select! {
-            line = stdin_lines.next_line() => {
-                match line? {
-                    Some(line) => {
-                        let mut msg = line;
-                        msg.push('\n');
-                        writer.write_all(msg.as_bytes()).await?;
-                    }
-                    None => break,
-                }
-            }
-            line = socket_lines.next_line() => {
-                match line? {
-                    Some(line) => {
-                        let mut msg = line;
-                        msg.push('\n');
-                        stdout.write_all(msg.as_bytes()).await?;
-                        stdout.flush().await?;
-                    }
-                    None => break,
-                }
-            }
-        }
+    while let Some(line) = stdin_lines.next_line().await? {
+        let response = match protocol::parse_client_message(&line) {
+            Ok(message) => runtime.handle_message(message),
+            Err(err) => DaemonMessage::Error {
+                message: format!("parse error: {err}"),
+                request_id: 0,
+            },
+        };
+
+        let mut message = protocol::encode_daemon_message(&response);
+        message.push('\n');
+        stdout.write_all(message.as_bytes()).await?;
+        stdout.flush().await?;
     }
 
-    Ok(())
-}
-
-fn start_daemon() -> Result<()> {
-    let exe = std::env::var_os("SHELLSUGGEST_BIN")
-        .map(Into::into)
-        .unwrap_or(std::env::current_exe()?);
-    Command::new(exe)
-        .arg("serve")
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()?;
     Ok(())
 }

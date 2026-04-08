@@ -5,7 +5,6 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_SOCKET_PATH: &str = "/tmp/shellsuggest-{uid}.sock";
 const DEFAULT_PATH_MAX_ENTRIES: usize = 256;
 const DEFAULT_SHOW_HIDDEN: bool = false;
 const DEFAULT_CD_FALLBACK_MODE: &str = "current_dir_only";
@@ -17,17 +16,10 @@ const DEFAULT_HISTORY_SEED_MAX_ENTRIES: usize = 20_000;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct Config {
-    pub daemon: DaemonConfig,
     pub path: PathConfig,
     pub cd: CdConfig,
     pub history: HistoryConfig,
     pub ui: UiConfig,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(default)]
-pub struct DaemonConfig {
-    pub socket_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -66,19 +58,10 @@ pub enum CdFallbackMode {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            daemon: DaemonConfig::default(),
             path: PathConfig::default(),
             cd: CdConfig::default(),
             history: HistoryConfig::default(),
             ui: UiConfig::default(),
-        }
-    }
-}
-
-impl Default for DaemonConfig {
-    fn default() -> Self {
-        Self {
-            socket_path: DEFAULT_SOCKET_PATH.into(),
         }
     }
 }
@@ -148,11 +131,6 @@ impl Config {
             .map(|home| PathBuf::from(home).join(".config/shellsuggest/config.toml"))
     }
 
-    pub fn socket_path(&self) -> PathBuf {
-        let uid = unsafe { libc::getuid() };
-        PathBuf::from(self.daemon.socket_path.replace("{uid}", &uid.to_string()))
-    }
-
     pub fn cd_fallback_mode(&self) -> CdFallbackMode {
         match self.cd.fallback_mode.as_str() {
             "disabled" => CdFallbackMode::Disabled,
@@ -191,9 +169,6 @@ impl Config {
         if self.history.seed_max_entries == 0 {
             self.history.seed_max_entries = DEFAULT_HISTORY_SEED_MAX_ENTRIES;
         }
-        if self.daemon.socket_path.trim().is_empty() {
-            self.daemon.socket_path = DEFAULT_SOCKET_PATH.into();
-        }
         if self.cd.fallback_mode.trim().is_empty() {
             self.cd.fallback_mode = DEFAULT_CD_FALLBACK_MODE.into();
         }
@@ -204,7 +179,6 @@ impl Config {
 impl fmt::Display for Config {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "config:")?;
-        writeln!(f, "  daemon.socket_path = {}", self.socket_path().display())?;
         writeln!(f, "  path.max_entries = {}", self.path.max_entries)?;
         writeln!(f, "  path.show_hidden = {}", self.path.show_hidden)?;
         writeln!(f, "  cd.fallback_mode = {}", self.cd.fallback_mode)?;
@@ -280,9 +254,6 @@ mod tests {
         let path = write_config(
             &dir,
             r#"
-[daemon]
-socket_path = "/tmp/custom-shellsuggest.sock"
-
 [path]
 max_entries = 128
 show_hidden = true
@@ -302,10 +273,6 @@ max_candidates = 7
 
         let config = Config::load_from_path(&path).unwrap();
 
-        assert_eq!(
-            config.socket_path(),
-            PathBuf::from("/tmp/custom-shellsuggest.sock")
-        );
         assert_eq!(config.path.max_entries, 128);
         assert!(config.path.show_hidden);
         assert_eq!(config.cd_fallback_mode(), CdFallbackMode::Disabled);
@@ -332,9 +299,6 @@ max_candidates = 7
         let path = write_config(
             &dir,
             r#"
-[daemon]
-socket_path = ""
-
 [path]
 max_entries = 0
 
@@ -354,7 +318,6 @@ max_candidates = 0
             DEFAULT_HISTORY_SEED_MAX_ENTRIES
         );
         assert_eq!(config.ui.max_candidates, DEFAULT_MAX_CANDIDATES);
-        assert_eq!(config.daemon.socket_path, DEFAULT_SOCKET_PATH);
     }
 
     #[test]

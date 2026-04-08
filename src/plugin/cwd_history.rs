@@ -30,12 +30,10 @@ impl InlineProvider for CwdHistoryPlugin {
         let cwd = req.cwd.to_string_lossy();
         let is_cd = ranking::extract_command(&req.buffer) == Some("cd");
 
-        // Query exact cwd matches
         let cwd_entries = store
             .ranked_commands_by_prefix_and_cwd(&req.buffer, &cwd, 20)
             .unwrap_or_default();
 
-        // For `cd`, only suggest entries executed from the current PWD.
         let parent_entries = if is_cd {
             Vec::new()
         } else {
