@@ -1,12 +1,10 @@
 # shellsuggest
 
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+cwd-aware inline suggestion engine for zsh.
 
-> Your shell should know where you are.
+Unlike [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) which suggests based on history prefix match alone, shellsuggest knows **where you are**. It ranks suggestions by your current directory, validates that suggested paths actually exist, and keeps a long-lived Rust query coprocess hot so the interactive path stays in the microsecond range on local benchmarks.
 
-shellsuggest provides smarter zsh autosuggestions, ranked by your current directory. It validates that suggested paths actually exist and runs as a long-lived Rust daemon so every suggestion arrives in microseconds.
-
-[zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) is a great plugin that brought fish-style suggestions to zsh. shellsuggest builds on that idea with directory-aware ranking, path validation, and a plugin-based daemon architecture. LLM-powered completions are planned and coming soon.
+## Why
 
 ```
 # zsh-autosuggestions: same suggestion everywhere
@@ -20,14 +18,16 @@ shellsuggest provides smarter zsh autosuggestions, ranked by your current direct
 
 ## Features
 
-- **Directory-aware history**: suggestions ranked by what you've run in this directory, and `cd` is restricted to this directory's own history
-- **Transition-aware ranking**: the last successful command biases the next suggestion, so `vim main.rs` can push `make test` above other `make` commands
-- **`cd` cold-start assist**: when local `cd` history is empty, suggest direct child directories from the current workspace
-- **History import**: on daemon start, imports your existing zsh history as a global fallback for prefixes that have no live match yet
-- **Path validation**: file/path commands like `vim` only suggest entries that actually exist on disk
-- **Multiple candidates**: cycle through suggestions inline with `Alt+n` / `Alt+p`
-- **Fast**: ~5us lookups at 100k history entries, ~15us end-to-end roundtrips on Apple Silicon
-- **Ghost text**: suggestions appear inline as dimmed text after your cursor, like fish shell's autosuggestions
+- **CWD-aware history** - suggestions ranked by what you've run in this directory, and `cd` is restricted to this directory's own history
+- **Transition-aware ranking** - the last successful command biases the next suggestion, so `vim main.rs` can push `make test` above other `make` commands
+- **`cd` cold-start assist** - when local `cd` history is empty, suggest direct child directories from the current workspace
+- **`HISTFILE` prewarm** - on query process start, import recent zsh history as a global fallback for prefixes that have no live journal match yet
+- **Path validation** - file/path commands like `vim` only suggest entries that actually exist
+- **Multiple candidates** - keep the best few suggestions in memory and cycle them inline with `Alt+n` / `Alt+p`
+- **Fast** - Rust query engine with pre-aggregated SQLite summaries, ~4.7us broker lookups and ~5.9us query protocol roundtrips at 100k rows on current local benchmarks
+- **Ghost text** - inline suggestion rendered via `POSTDISPLAY`, just like fish shell
+- **Feedback-aware metrics** - accepted/cleared suggestions are recorded for status reporting and future tuning
+- **Single binary** - `cargo install shellsuggest`, one line in `.zshrc`
 
 ## Getting Started
 
@@ -61,21 +61,48 @@ cargo install --path .
 
 ### Setup
 
-Install the zsh plugin into `~/.zshrc` automatically:
+Install into `~/.zshrc` automatically:
 
 ```bash
 shellsuggest init
 ```
 
-Or add the snippet manually:
+If you want the raw shell snippet instead, add this manually:
 
 ```zsh
 eval "$(shellsuggest init zsh)"
 ```
 
-## Usage
+## Migration From zsh-autosuggestions
 
-### Key Bindings
+`shellsuggest init` already checks `~/.zshrc` and runs the common migration path automatically. If you want to run the rewrite directly or preview it:
+
+```bash
+shellsuggest migrate zsh-autosuggestions
+```
+
+What it does:
+
+- disables `zsh-autosuggestions` source/plugin-manager lines
+- removes `zsh-autosuggestions` from `plugins=(...)`
+- appends `eval "$(shellsuggest init zsh)"`
+- prints warnings for settings that still need manual review
+
+Use `--dry-run` to preview the summary without writing the file:
+
+```bash
+shellsuggest migrate zsh-autosuggestions --dry-run
+```
+
+The plugin also accepts a few common `zsh-autosuggestions` carry-overs during migration:
+
+- `ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE`
+- `ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE`
+- `ZSH_AUTOSUGGEST_HISTORY_IGNORE`
+- `ZSH_AUTOSUGGEST_MANUAL_REBIND`
+- `autosuggest-accept` / `autosuggest-clear` / `autosuggest-execute` / `autosuggest-fetch` / `autosuggest-enable` / `autosuggest-disable` / `autosuggest-toggle`
+
+## Key Bindings
 
 | Key | Action |
 |---|---|
@@ -86,44 +113,68 @@ eval "$(shellsuggest init zsh)"
 | `Ctrl+->` / `Alt+->` | Accept one word when your terminal sends those keys |
 | `Esc` | Clear suggestion |
 
-### Migration From zsh-autosuggestions
+## Architecture
 
-`shellsuggest init` already checks `~/.zshrc` and runs the common migration path automatically. To run the rewrite directly or preview it:
-
-```bash
-shellsuggest migrate zsh-autosuggestions          # rewrite ~/.zshrc
-shellsuggest migrate zsh-autosuggestions --dry-run # preview only
+```
+zsh plugin (.zsh)          pure zsh, renders ghost text, manages coproc
+       |
+       | stdin/stdout (compact line protocol)
+       v
+shellsuggest query         long-lived Rust coprocess per shell
+                           broker, session candidate state, journal writes
+       |
+       v
+SQLite journal             shared across shells via WAL
+                           history, feedback, path cache, aggregate stats
 ```
 
-What it does:
+Important architectural points:
 
-- Disables `zsh-autosuggestions` source/plugin-manager lines
-- Removes `zsh-autosuggestions` from `plugins=(...)`
-- Appends `eval "$(shellsuggest init zsh)"`
-- Prints warnings for settings that still need manual review
+- There is no shared daemon. Each interactive zsh session keeps one `shellsuggest query` coprocess alive.
+- Candidate cycling state is local to that shell session.
+- Command history and feedback are shared across shells through `~/.local/share/shellsuggest/journal.db`.
+- SQLite is opened in WAL mode with a busy timeout so multiple shell sessions can reuse the same journal safely.
 
-The plugin also accepts common `zsh-autosuggestions` carry-overs: `ZSH_AUTOSUGGEST_HIGHLIGHT_STYLE`, `ZSH_AUTOSUGGEST_BUFFER_MAX_SIZE`, `ZSH_AUTOSUGGEST_HISTORY_IGNORE`, `ZSH_AUTOSUGGEST_MANUAL_REBIND`, and the `autosuggest-*` widget names.
+Four suggestion plugins participate on each query:
 
-### CLI
+1. **history** - traditional prefix match (baseline)
+2. **cwd_history** - same as history but filtered/boosted by current directory
+3. **path** - reads the filesystem, suggests real files/directories
+4. **cd_assist** - direct child directories for `cd` when local history has no match
+
+Results are merged and ranked:
+
+```
+score =
+  0.30 * prefix_exactness
++ 0.25 * cwd_similarity
++ 0.20 * path_exists
++ 0.10 * recency
++ 0.05 * frequency
++ 0.05 * command_transition
++ 0.05 * success_bonus
+```
+
+Dangerous commands (`rm`, `mv`, `cp`) require a higher confidence score to be suggested.
+
+## CLI
 
 ```bash
-shellsuggest serve     # start daemon (auto-started by plugin)
-shellsuggest query     # client mode (used by zsh coproc)
-shellsuggest status    # show daemon state, feedback totals, cache stats, config
+shellsuggest query     # query runtime used by the zsh coproc
+shellsuggest status    # show runtime model, feedback totals, cache stats, config
 shellsuggest journal   # inspect command history
-shellsuggest init [--dry-run]  # inspect/update ~/.zshrc
+shellsuggest init [--zshrc PATH] [--dry-run]  # inspect/update ~/.zshrc
 shellsuggest init zsh  # output raw zsh plugin source
-shellsuggest migrate zsh-autosuggestions [--dry-run]  # rewrite ~/.zshrc
+shellsuggest migrate zsh-autosuggestions [--zshrc PATH] [--dry-run]  # rewrite ~/.zshrc
 ```
 
-### Configuration
+`shellsuggest query` is normally started by the plugin rather than run by hand.
+
+## Configuration
 
 `~/.config/shellsuggest/config.toml`:
 
 ```toml
-[daemon]
-socket_path = "/tmp/shellsuggest-{uid}.sock"  # default
-
 [path]
 max_entries = 256      # max directory entries to scan
 show_hidden = false    # suggest hidden files/dirs
@@ -142,63 +193,64 @@ max_candidates = 5
 
 Data is stored at `~/.local/share/shellsuggest/journal.db`.
 
-### How It Works
+`shellsuggest query`, `status`, and `journal` all load the same config file. Invalid TOML causes those commands to exit with an error.
 
-```
-zsh plugin (.zsh)          pure zsh, renders ghost text
-       |
-       | stdin/stdout (compact line protocol)
-       v
-shellsuggest query         coproc, relays to daemon
-       |
-       | Unix domain socket
-       v
-shellsuggest serve         long-lived Rust daemon
-                           4 plugins, SQLite journal, session candidate state
-```
+All shell sessions share that same SQLite file. The runtime uses WAL mode and a busy timeout so separate `query` processes can read and write without needing a daemon.
 
-Four suggestion plugins run on every keystroke:
+`HISTFILE` prewarm is intentionally conservative:
 
-1. **history**: traditional prefix match (baseline)
-2. **cwd_history**: same as history but filtered/boosted by current directory
-3. **path**: reads the filesystem, suggests real files/directories
-4. **cd_assist**: direct child directories for `cd` when local history has no match
+- it only affects the global `history` fallback
+- it does not populate cwd-specific history, transitions, exit codes, or durations
+- live journal matches always win over seeded history for the same prefix
 
-Results are merged and ranked:
+## Performance
 
-```
-score =
-  0.30 * prefix_exactness
-+ 0.25 * cwd_similarity
-+ 0.20 * path_exists
-+ 0.10 * recency
-+ 0.05 * frequency
-+ 0.05 * command_transition
-+ 0.05 * success_bonus
-```
-
-Dangerous commands (`rm`, `mv`, `cp`) require a higher confidence score to be suggested.
-
-### Performance
-
-Benchmarked on Apple Silicon (M3 Pro) with `cargo bench --bench suggest`:
+Benchmarked on Apple Silicon with `cargo bench --bench suggest`:
 
 | Scenario | Time |
 |---|---|
-| Broker lookup, 10k journal rows | ~3.0us |
-| Broker lookup, 100k journal rows | ~4.9us |
-| Transition-aware broker lookup, 100k journal rows | ~8.2us |
-| Daemon roundtrip, 100k journal rows | ~14.8us |
-| Path plugin, 256-entry directory | ~49us |
+| Broker lookup, 10k journal rows | ~3.1us |
+| Broker lookup, 100k journal rows | ~4.7us |
+| Transition-aware broker lookup, 100k journal rows | ~7.9us |
+| Query protocol roundtrip, 100k journal rows | ~5.9us |
+| Path plugin, 256-entry directory | ~51us |
 
-## Contributing
+Notes:
 
-Contributions are welcome. Please read the [Contributing Guide](CONTRIBUTING.md) before submitting a pull request.
+- `Broker lookup` measures `Broker::suggest()` directly with an in-memory SQLite store.
+- `Transition-aware broker lookup` measures `Broker::suggest()` when transition scoring is active.
+- `Query protocol roundtrip` measures compact line encode/parse plus runtime handling on a reused query runtime.
+- `Path plugin` measures a real `pushd` directory suggestion over a 256-entry directory.
+- These numbers are core-engine benchmarks. Real interactive latency also includes zsh widget/rendering overhead.
+
+Benchmark environment:
+
+- MacBook Pro (`Mac15,6`)
+- Apple M3 Pro, 11 CPU cores
+- 18 GB memory
+- macOS 26.2 (`25C56`), `arm64`
+- `rustc 1.93.1 (01f6ddf75 2026-02-11)`
+
+## Development
+
+```bash
+# Build
+cargo build --release
+
+# Run all Rust tests
+cargo test
+
+# Run E2E tests (requires tmux + ruby; expects the release binary)
+brew install tmux ruby
+export PATH="/opt/homebrew/opt/ruby/bin:$PATH"
+bundle config set --local path vendor/bundle
+bundle install
+bundle exec rspec
+
+# Benchmarks
+cargo bench --bench suggest
+```
 
 ## License
 
 This project is licensed under the Apache License 2.0. See the [LICENSE](LICENSE) file for details.
-
-## Author
-
-**Yein Sung**: [GitHub](https://github.com/syi0808)
