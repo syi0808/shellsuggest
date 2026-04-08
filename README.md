@@ -30,7 +30,7 @@ Unlike [zsh-autosuggestions](https://github.com/zsh-users/zsh-autosuggestions) w
 - **`HISTFILE` prewarm** - on query process start, import recent zsh history as a global fallback for prefixes that have no live journal match yet
 - **Async coprocess runtime** - suggestion work stays in a hot Rust query process instead of paying per-keystroke process spawn overhead in zsh
 - **Path validation** - file/path commands like `vim` only suggest entries that actually exist
-- **Multiple candidates** - keep the best few suggestions in memory and cycle them inline with `Alt+n` / `Alt+p`
+- **Multiple candidates** - keep the best few suggestions in memory and cycle them inline with `Alt+j` / `Alt+k`
 - **Fast** - Rust query engine with pre-aggregated SQLite summaries, ~4.7us broker lookups and ~5.9us query protocol roundtrips at 100k rows on current local benchmarks
 - **Ghost text** - inline suggestion rendered via `POSTDISPLAY`, just like fish shell
 - **Feedback-aware metrics** - accepted/cleared suggestions are recorded for status reporting and future tuning
@@ -115,10 +115,9 @@ The plugin also accepts a few common `zsh-autosuggestions` carry-overs during mi
 |---|---|
 | `->` (right arrow) | Accept full suggestion |
 | `Alt+f` | Accept one word |
-| `Alt+n` | Cycle to the next suggestion |
-| `Alt+p` | Cycle to the previous suggestion |
-| `Ctrl+->` / `Alt+->` | Accept one word when your terminal sends those keys |
-| `Esc` | Clear suggestion |
+| `Alt+j` | Cycle to the next suggestion |
+| `Alt+k` | Cycle to the previous suggestion |
+| `Alt+;` | Clear suggestion |
 
 ## Architecture
 

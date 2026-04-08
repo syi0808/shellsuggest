@@ -46,13 +46,13 @@ describe 'accept widgets' do
     end
   end
 
-  describe 'escape (clear)' do
+  describe 'alt+; (clear)' do
     it 'clears the suggestion' do
       with_history('echo hello') do
         session.send_string('echo')
         wait_for { session.content }.to eq('echo hello')
 
-        session.send_keys('escape')
+        session.send_keys('M-;')
         wait_for { session.content }.to eq('echo')
       end
     end

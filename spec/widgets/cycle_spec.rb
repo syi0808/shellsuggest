@@ -14,16 +14,16 @@ describe 'candidate cycling' do
     FileUtils.rm_rf(@tmpdir) if @tmpdir
   end
 
-  it 'cycles to the next and previous suggestion with alt keys' do
+  it 'cycles to the next and previous suggestion with alt+j/alt+k' do
     session.send_string('cd s')
     wait_for { session.content }.to satisfy { |value| ['cd src', 'cd scripts'].include?(value) }
     first = session.content
 
-    session.send_keys('M-n')
+    session.send_keys('M-j')
     wait_for { session.content }.to satisfy { |value| value != first && ['cd src', 'cd scripts'].include?(value) }
     second = session.content
 
-    session.send_keys('M-p')
+    session.send_keys('M-k')
     wait_for { session.content }.to eq(first)
     expect(second).not_to eq(first)
   end
@@ -33,11 +33,11 @@ describe 'candidate cycling' do
     wait_for { session.content }.to satisfy { |value| ['cd src', 'cd scripts'].include?(value) }
     first = session.content
 
-    session.send_keys('M-p')
+    session.send_keys('M-k')
     wait_for { session.content }.to satisfy { |value| value != first && ['cd src', 'cd scripts'].include?(value) }
     wrapped = session.content
 
-    session.send_keys('M-n')
+    session.send_keys('M-j')
     wait_for { session.content }.to eq(first)
     expect(wrapped).not_to eq(first)
   end

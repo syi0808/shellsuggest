@@ -649,6 +649,19 @@ _shellsuggest_bind_word_keys() {
     bindkey -M "$keymap" '^[f' "$widget"
 }
 
+_shellsuggest_bind_cycle_keys() {
+    local keymap="$1"
+
+    bindkey -M "$keymap" '^[j' _shellsuggest_cycle_next
+    bindkey -M "$keymap" '^[k' _shellsuggest_cycle_prev
+}
+
+_shellsuggest_bind_clear_keys() {
+    local keymap="$1"
+
+    bindkey -M "$keymap" '^[;' _shellsuggest_clear
+}
+
 _shellsuggest_bind_widgets() {
     _shellsuggest_wrap_widget forward-char _shellsuggest_orig_forward-char _shellsuggest_forward_char
     _shellsuggest_wrap_widget vi-forward-char _shellsuggest_orig_vi-forward-char _shellsuggest_vi_forward_char
@@ -695,11 +708,10 @@ zle -N autosuggest-toggle _shellsuggest_toggle
 _shellsuggest_bind_widgets
 
 # Bind keys
-bindkey -M emacs '\e' _shellsuggest_clear
-bindkey -M emacs '^[n' _shellsuggest_cycle_next
-bindkey -M emacs '^[p' _shellsuggest_cycle_prev
-bindkey -M viins '^[n' _shellsuggest_cycle_next
-bindkey -M viins '^[p' _shellsuggest_cycle_prev
+_shellsuggest_bind_cycle_keys emacs
+_shellsuggest_bind_cycle_keys viins
+_shellsuggest_bind_clear_keys emacs
+_shellsuggest_bind_clear_keys viins
 
 _shellsuggest_bind_word_keys emacs emacs-forward-word
 _shellsuggest_bind_word_keys viins forward-word
