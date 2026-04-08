@@ -1,20 +1,18 @@
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use shellsuggest::config::CdFallbackMode;
+use shellsuggest::config::{CdFallbackMode, CdMode};
 use shellsuggest::daemon::broker::{Broker, BrokerOptions};
-use shellsuggest::daemon::server;
 use shellsuggest::db::models::JournalEntry;
 use shellsuggest::db::store::Store;
 use shellsuggest::plugin::SuggestionRequest;
 use shellsuggest::protocol::{self, ClientMessage, DaemonMessage};
+use shellsuggest::runtime::QueryRuntime;
 
 fn broker_options() -> BrokerOptions {
     BrokerOptions {
+        cd_mode: CdMode::Builtin,
         path_show_hidden: false,
         path_max_entries: 256,
         max_candidates: 5,
@@ -92,62 +90,16 @@ fn populate_transition_store(store: &Arc<Mutex<Store>>, pair_count: usize) {
     }
 }
 
-struct BenchDaemonClient {
-    socket_path: PathBuf,
-    _server_thread: std::thread::JoinHandle<()>,
-    reader: BufReader<UnixStream>,
-    writer: UnixStream,
+struct BenchQueryRuntime {
+    runtime: QueryRuntime,
 }
 
-impl BenchDaemonClient {
+impl BenchQueryRuntime {
     fn start(row_count: usize) -> Self {
-        let socket_path = PathBuf::from(format!(
-            "/tmp/shellsuggest-bench-{}-{}.sock",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        let _ = std::fs::remove_file(&socket_path);
-        let _ = std::fs::remove_file(socket_path.with_extension("pid"));
         let store = Arc::new(Mutex::new(Store::open_in_memory().unwrap()));
         populate_store(&store, row_count);
-
-        let server_thread = {
-            let socket_path = socket_path.clone();
-            let store = Arc::clone(&store);
-            std::thread::spawn(move || {
-                let rt = tokio::runtime::Runtime::new().unwrap();
-                rt.block_on(server::run(&socket_path, store, broker_options()))
-                    .unwrap();
-            })
-        };
-
-        let mut stream = None;
-        for _ in 0..100 {
-            match UnixStream::connect(&socket_path) {
-                Ok(sock) => {
-                    stream = Some(sock);
-                    break;
-                }
-                Err(_) => std::thread::sleep(Duration::from_millis(10)),
-            }
-        }
-        let writer = stream.expect("daemon socket should be reachable");
-        writer
-            .set_read_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        writer
-            .set_write_timeout(Some(Duration::from_secs(1)))
-            .unwrap();
-        let reader = BufReader::new(writer.try_clone().unwrap());
-
         Self {
-            socket_path,
-            _server_thread: server_thread,
-            reader,
-            writer,
+            runtime: QueryRuntime::new(store, broker_options()),
         }
     }
 
@@ -167,21 +119,11 @@ impl BenchDaemonClient {
             last_command: last_command.map(str::to_string),
         };
 
-        let mut line = protocol::encode_client_message(&message);
-        line.push('\n');
-        self.writer.write_all(line.as_bytes()).unwrap();
-        self.writer.flush().unwrap();
-
-        let mut line = String::new();
-        self.reader.read_line(&mut line).unwrap();
-        protocol::parse_daemon_message(line.trim_end()).unwrap()
-    }
-}
-
-impl Drop for BenchDaemonClient {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(&self.socket_path);
-        let _ = std::fs::remove_file(self.socket_path.with_extension("pid"));
+        let line = protocol::encode_client_message(&message);
+        let parsed = protocol::parse_client_message(&line).unwrap();
+        let response = self.runtime.handle_message(parsed);
+        let encoded = protocol::encode_daemon_message(&response);
+        protocol::parse_daemon_message(&encoded).unwrap()
     }
 }
 
@@ -269,17 +211,17 @@ fn bench_transition_suggest_100k(c: &mut Criterion) {
     });
 }
 
-fn bench_daemon_roundtrip_100k(c: &mut Criterion) {
-    let mut client = BenchDaemonClient::start(100_000);
+fn bench_query_roundtrip_100k(c: &mut Criterion) {
+    let mut runtime = BenchQueryRuntime::start(100_000);
 
-    c.bench_function("daemon_roundtrip_100k_rows", |b| {
+    c.bench_function("query_roundtrip_100k_rows", |b| {
         b.iter(|| {
-            let response = client.suggest(black_box("cargo "), 6, "/project", None);
+            let response = runtime.suggest(black_box("cargo "), 6, "/project", None);
             match response {
                 DaemonMessage::Suggestion { text, .. } => {
                     assert_eq!(text, "cargo test");
                 }
-                other => panic!("unexpected daemon response: {other:?}"),
+                other => panic!("unexpected query response: {other:?}"),
             }
         })
     });
@@ -291,6 +233,6 @@ criterion_group!(
     bench_suggest_100k,
     bench_path_suggest,
     bench_transition_suggest_100k,
-    bench_daemon_roundtrip_100k
+    bench_query_roundtrip_100k
 );
 criterion_main!(benches);
