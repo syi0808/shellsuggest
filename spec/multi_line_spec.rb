@@ -2,7 +2,7 @@
 
 describe 'complex suggestions' do
   it 'suggests commands with special content via journal injection' do
-    # Inject directly to daemon — avoids tmux/shell quoting entirely
+    # Inject through the query protocol helper to avoid tmux/shell quoting issues
     inject_journal_entries([{ command: 'grep -r TODO src/', cwd: Dir.pwd }])
     session.clear_screen
 
@@ -35,6 +35,6 @@ describe 'complex suggestions' do
   end
 
   # Note: single/double quote tests are skipped due to tmux send-keys
-  # quoting limitations. The daemon correctly handles quotes — verified
-  # via direct socket tests in tests/integration.rs
+  # quoting limitations. The query protocol correctly handles quotes — verified
+  # via child-process integration tests in tests/integration.rs
 end

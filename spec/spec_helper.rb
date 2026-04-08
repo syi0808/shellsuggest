@@ -24,17 +24,6 @@ RSpec.shared_context 'terminal session' do
     bin_dir = File.dirname(SHELLSUGGEST_BIN)
     session.run_command("export PATH=\"#{bin_dir}:$PATH\"")
 
-    # Kill any stale daemon and wipe journal for test isolation
-    socket_path = "/tmp/shellsuggest-#{Process.uid}.sock"
-    pid_path = socket_path.sub('.sock', '.pid')
-    if File.exist?(pid_path)
-      pid = File.read(pid_path).strip.to_i
-      Process.kill('TERM', pid) rescue nil
-      sleep 0.2
-    end
-    File.delete(socket_path) rescue nil
-    File.delete(pid_path) rescue nil
-
     # Wipe the journal DB for clean test state
     db_path = File.join(ENV['XDG_DATA_HOME'] || File.expand_path('~/.local/share'), 'shellsuggest', 'journal.db')
     File.delete(db_path) if File.exist?(db_path)
@@ -46,24 +35,12 @@ RSpec.shared_context 'terminal session' do
 
     example.run
 
-    # Cleanup daemon after test
-    if File.exist?(socket_path)
-      pid_path = socket_path.sub('.sock', '.pid')
-      if File.exist?(pid_path)
-        pid = File.read(pid_path).strip.to_i
-        Process.kill('TERM', pid) rescue nil
-      end
-      File.delete(socket_path) rescue nil
-    end
-
     session.destroy
   end
 
-  # Populate shell history and daemon journal for the test.
-  # Journal entries are written directly to SQLite (no daemon needed for writes).
+  # Populate shell history and shellsuggest journal for the test.
   # Shell history is set via fc -p / fc -R.
   def with_history(*commands, &block)
-    # Write journal entries directly to the daemon's SQLite DB
     inject_journal_entries(commands.map { |cmd| { command: cmd, cwd: Dir.pwd } })
 
     # History file for zsh fc
@@ -93,34 +70,25 @@ RSpec.shared_context 'terminal session' do
 
   private
 
-  # Inject journal entries directly via the daemon's Unix socket from Ruby.
-  # This avoids all shell quoting issues — protocol frames are sent raw over the socket.
+  # Inject journal entries through a standalone query process so the tests use
+  # the same protocol path as the zsh plugin without needing shell quoting.
   def inject_journal_entries(entries)
-    require 'socket'
-
-    socket_path = "/tmp/shellsuggest-#{Process.uid}.sock"
-
-    # Wait for daemon socket to appear (it may still be starting)
-    20.times do
-      break if File.exist?(socket_path)
-      sleep 0.1
-    end
-    return unless File.exist?(socket_path)
-
     begin
-      sock = UNIXSocket.new(socket_path)
-      entries.each do |entry|
-        cmd = entry[:command]
-        cwd = entry[:cwd] || Dir.pwd
-        exit_code = entry[:exit_code] || 0
-        frame = ['r', exit_code.to_s, '10', protocol_escape('test'), protocol_escape(cwd), protocol_escape(cmd)].join("\t")
-        sock.puts(frame)
-        # Read ack
-        sock.gets
+      IO.popen([SHELLSUGGEST_BIN, 'query'], 'r+') do |io|
+        entries.each do |entry|
+          cmd = entry[:command]
+          cwd = entry[:cwd] || Dir.pwd
+          exit_code = entry[:exit_code] || 0
+          frame = ['r', exit_code.to_s, '10', protocol_escape('test'), protocol_escape(cwd), protocol_escape(cmd)].join("\t")
+          io.puts(frame)
+          io.flush
+          io.gets
+        end
       end
-      sock.close
-    rescue => e
-      # Silently fail — daemon might not be ready yet
+    rescue StandardError
+      entries.each do |entry|
+        warn "failed to inject journal entry for #{entry[:command].inspect}"
+      end
     end
 
     sleep 0.1

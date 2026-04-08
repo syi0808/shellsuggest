@@ -54,10 +54,6 @@ _shellsuggest_clear_highlight() {
     local entry
     local -a remaining_highlights=()
 
-    if [[ -z "$_SHELLSUGGEST_REGION_HIGHLIGHT" ]]; then
-        return
-    fi
-
     for entry in "${region_highlight[@]}"; do
         [[ "$entry" == *"${_SHELLSUGGEST_HIGHLIGHT_MEMO}"* ]] && continue
         remaining_highlights+=("$entry")
@@ -105,31 +101,8 @@ _shellsuggest_set_suggestion() {
     _shellsuggest_apply_highlight
 }
 
-_shellsuggest_suggestion_source_allowed_for_buffer() {
-    local -a parts
-
-    [[ -z "$_SHELLSUGGEST_SUGGESTION_SOURCE" ]] && return 0
-
-    parts=("${(z)BUFFER}")
-    [[ ${#parts} -eq 0 ]] && return 0
-
-    case "${parts[1]}" in
-        cd)
-            [[ "$_SHELLSUGGEST_SUGGESTION_SOURCE" == "cwd_history" || "$_SHELLSUGGEST_SUGGESTION_SOURCE" == "cd_assist" ]]
-            ;;
-        *)
-            return 0
-            ;;
-    esac
-}
-
 _shellsuggest_refresh_suggestion_for_buffer() {
     if [[ -z "$_SHELLSUGGEST_SUGGESTION" ]]; then
-        return
-    fi
-
-    if ! _shellsuggest_suggestion_source_allowed_for_buffer; then
-        _shellsuggest_clear_suggestion
         return
     fi
 
@@ -438,6 +411,7 @@ _shellsuggest_accept_full() {
     _shellsuggest_clear_suggestion
 
     _shellsuggest_invoke_original_widget "$original_widget_name" "$@"
+    _shellsuggest_clear_highlight
 
     if [[ "$KEYMAP" == "vicmd" ]]; then
         CURSOR=$(( ${#BUFFER} > 0 ? ${#BUFFER} - 1 : 0 ))
@@ -739,5 +713,5 @@ autoload -Uz add-zsh-hook
 add-zsh-hook preexec _shellsuggest_preexec
 add-zsh-hook precmd _shellsuggest_precmd
 
-# Start coproc connection to daemon
+# Start coproc connection to the Rust query engine
 _shellsuggest_start_coproc

@@ -1,15 +1,10 @@
 require 'shellwords'
 require 'tmpdir'
 
-# shellsuggest-specific: Daemon lifecycle tests
+# shellsuggest-specific: query coprocess lifecycle tests
 
-describe 'daemon lifecycle' do
-  it 'auto-starts daemon when not running' do
-    # Kill any existing daemon first
-    session.run_command('shellsuggest status')
-    sleep 0.3
-
-    # Type something — daemon should auto-start via coproc
+describe 'query lifecycle' do
+  it 'starts the query coprocess on plugin load' do
     with_history('echo hello') do
       session.send_string('echo h')
       wait_for { session.content }.to eq('echo hello')
@@ -47,14 +42,13 @@ describe 'daemon lifecycle' do
     end
   end
 
-  it 'status command shows daemon state' do
-    # After plugin is loaded, daemon should be running
+  it 'status command shows runtime mode' do
     sleep 0.5
     session.run_command('shellsuggest status')
-    wait_for { session.content }.to include('daemon:')
+    wait_for { session.content }.to include('runtime:')
   end
 
-  it 'shows suggestions in a fresh terminal while reusing an existing daemon' do
+  it 'shows suggestions in a fresh terminal with its own query coprocess' do
     with_history('echo hello') do
       session.send_string('echo h')
       wait_for { session.content }.to eq('echo hello')

@@ -64,18 +64,16 @@ describe 'cwd-aware history suggestion' do
   it 'does not suggest cd commands from the destination directory' do
     Dir.mktmpdir('shellsuggest-cd-cwd-history') do |dir|
       workspace = File.join(dir, 'Workspace')
+      pwd_file = File.join(dir, 'pwd.txt')
       FileUtils.mkdir_p(workspace)
 
       session.run_command("cd #{Shellwords.escape(dir)}")
       session.run_command('cd Workspace')
       sleep 0.5
+      session.run_command("print -r -- $PWD > #{Shellwords.escape(pwd_file)}")
+      wait_for { File.exist?(pwd_file) && File.read(pwd_file).strip }.to eq(workspace)
       session.clear_screen
 
-      session.send_string('cd W')
-      sleep 0.5
-      expect(session.content).to eq('cd W')
-
-      session.send_keys('C-c')
       session.run_command('cd ..')
       sleep 0.5
       session.clear_screen

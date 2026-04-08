@@ -1,5 +1,5 @@
 # Tests basic history prefix matching behavior
-# Uses real command execution to populate the daemon journal
+# Uses real command execution to populate the shared shellsuggest journal
 
 describe 'history suggestion' do
   it 'suggests the last matching history entry' do
